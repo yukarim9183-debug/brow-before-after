@@ -117,7 +117,7 @@ button.on { background: var(--accent); color: var(--accent-ink); border-color: v
 
 .inapp { background: var(--accent-soft); color: var(--ink); border-radius: 10px; padding: 10px 12px; font-size: 13px; line-height: 1.6; }
 .sheet {
-  position: fixed; inset: 0; z-index: 20; background: rgba(20, 16, 15, .88);
+  position: fixed; inset: 0; z-index: 20; background: rgba(20, 16, 15, .96);
   display: flex; align-items: center; justify-content: center;
   padding: calc(16px + env(safe-area-inset-top, 0px)) 16px calc(16px + env(safe-area-inset-bottom, 0px));
 }
@@ -127,7 +127,15 @@ button.on { background: var(--accent); color: var(--accent-ink); border-color: v
 .sheet-title b { color: #f3c2b4; }
 .sheet img { width: 100%; max-height: 64svh; object-fit: contain; border-radius: 6px; background: #fff;
   -webkit-touch-callout: default; user-select: auto; }
-.sheet button { min-width: 160px; min-height: 48px; font-size: 16px; font-weight: 700; background: #fff; color: #221d1b; border: none; border-radius: 10px; }
+.sheet img { max-height: 46svh; }
+.sheet-actions { width: 100%; display: grid; gap: 6px; }
+.sheet button { width: 100%; min-height: 50px; font-size: 16px; font-weight: 700; background: #fff; color: #221d1b; border: none; border-radius: 12px; }
+.sheet button.sheet-primary { background: #d08d7a; color: #1b1817; min-height: 56px; font-size: 17px; }
+.sheet button.sheet-close { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,.4); margin-top: 6px; }
+.sheet-note { margin: 0 0 8px; color: #e9dfdb; font-size: 12.5px; text-align: center; }
+.sheet-note b { color: #f3c2b4; }
+.sheet-msg { margin: 0; color: #f3c2b4; font-size: 14px; font-weight: 700; text-align: center; min-height: 1.4em; }
+.sheet-msg:empty { display: none; }
 body.sheet-open { overflow: hidden; }
 
 /* Before / After switch: phones only */
@@ -252,9 +260,16 @@ body.sheet-open { overflow: hidden; }
 
   <div class="sheet" id="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
     <div class="sheet-body">
-      <p class="sheet-title" id="sheet-title">画像を<b>長押し</b>して<br>「写真に保存」（Android は「画像をダウンロード」）を選んでください</p>
+      <p class="sheet-title" id="sheet-title">完成しました</p>
       <img id="sheet-img" alt="完成したビフォーアフター画像">
-      <button type="button" id="sheet-close">閉じる</button>
+      <div class="sheet-actions">
+        <button type="button" class="sheet-primary" id="sheet-photos">写真アプリに保存</button>
+        <p class="sheet-note" id="sheet-photos-note">次の画面で<b>「画像を保存」</b>を選んでください</p>
+        <button type="button" id="sheet-files">ファイルアプリに保存</button>
+        <p class="sheet-note" id="sheet-files-note">「ダウンロード」フォルダに入ります</p>
+        <p class="sheet-msg" id="sheet-msg" role="status"></p>
+        <button type="button" class="sheet-close" id="sheet-close">閉じる</button>
+      </div>
     </div>
   </div>
 </div>
@@ -779,15 +794,61 @@ body.sheet-open { overflow: hidden; }
   }
   const isTouch = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches);
 
-  function blobToDataURL(blob) {
-    return new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  let sheetFile = null, sheetUrl = null;
+
+  function downloadBlob(r) {
+    const url = URL.createObjectURL(r.blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = r.filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
   }
-  // Fallback that works in every browser, LINE included: show the image to long-press
-  async function showSheet(r) {
-    $('sheet-img').src = await blobToDataURL(r.blob);
+  const canShareFile = r => !!(navigator.canShare && navigator.canShare({ files: [r.file] }));
+
+  // Save screen for phones: one button to the photo library (share sheet), one to the Downloads folder
+  function showSheet(r) {
+    sheetFile = r;
+    if (sheetUrl) URL.revokeObjectURL(sheetUrl);
+    sheetUrl = URL.createObjectURL(r.blob);
+    $('sheet-img').src = sheetUrl;
+    const share = canShareFile(r);
+    if (isIOS) {
+      $('sheet-photos').textContent = '写真アプリに保存';
+      $('sheet-photos-note').innerHTML = '次の画面で<b>「画像を保存」</b>を選んでください';
+      $('sheet-files').textContent = 'ファイルアプリに保存';
+      $('sheet-files-note').textContent = 'ファイルアプリの「ダウンロード」フォルダに入ります';
+      $('sheet-photos').hidden = $('sheet-photos-note').hidden = !share;
+    } else {
+      // Android: a plain download lands straight in the Download folder, so put it first
+      $('sheet-photos').textContent = '端末に保存（ダウンロード）';
+      $('sheet-photos-note').textContent = '「Download」フォルダに入り、ギャラリーにも表示されます';
+      $('sheet-files').textContent = '共有して保存（Googleフォトなど）';
+      $('sheet-files-note').textContent = '';
+      $('sheet-files').hidden = !share;
+      $('sheet-photos').hidden = $('sheet-photos-note').hidden = false;
+    }
+    $('sheet-msg').textContent = '';
     $('sheet').hidden = false;
     document.body.classList.add('sheet-open');
   }
+  function sheetShare() {
+    const r = sheetFile;
+    navigator.share({ files: [r.file] })
+      .then(() => { $('sheet-msg').textContent = '保存できました。'; })
+      .catch(err => {
+        if (err && err.name === 'AbortError') $('sheet-msg').textContent = 'キャンセルしました。';
+        else $('sheet-msg').textContent = 'この方法では保存できませんでした。もう一方のボタンか、画像の長押しで保存してください。';
+      });
+  }
+  function sheetDownload() {
+    downloadBlob(sheetFile);
+    $('sheet-msg').textContent = isIOS
+      ? '表示された画面で「ダウンロード」を押すと保存されます。'
+      : '保存しました。通知またはギャラリーで確認できます。';
+  }
+  $('sheet-photos').addEventListener('click', () => (isIOS ? sheetShare() : sheetDownload()));
+  $('sheet-files').addEventListener('click', () => (isIOS ? sheetDownload() : sheetShare()));
   $('sheet-close').addEventListener('click', () => { $('sheet').hidden = true; document.body.classList.remove('sheet-open'); });
 
   async function saveOnComputer(r) {
@@ -805,11 +866,7 @@ body.sheet-open { overflow: hidden; }
       }
       return;
     }
-    const url = URL.createObjectURL(r.blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = r.filename;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    downloadBlob(r);
     setMsg('ダウンロードしました：' + r.filename);
   }
 
@@ -819,17 +876,6 @@ body.sheet-open { overflow: hidden; }
     }
     setMsg('');
     if (isTouch) {
-      // Share sheet must be opened synchronously inside the tap
-      if (ready && navigator.canShare && navigator.canShare({ files: [ready.file] })) {
-        const r = ready;
-        navigator.share({ files: [r.file] })
-          .then(() => setMsg('保存できました。'))
-          .catch(err => {
-            if (err && err.name === 'AbortError') setMsg('「画像を保存」を選ぶと写真アプリに入ります。');
-            else showSheet(r);
-          });
-        return;
-      }
       (ready ? Promise.resolve(ready) : buildExport()).then(r => r ? showSheet(r) : setMsg('画像を作れませんでした。もう一度押してください。', true));
       return;
     }
