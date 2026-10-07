@@ -94,11 +94,11 @@ button.on { background: var(--accent); color: var(--accent-ink); border-color: v
 .filebtn { background: var(--accent-soft); border-color: transparent; font-weight: 700; }
 .filebtn input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 
-.slider { display: grid; grid-template-columns: 2.6em minmax(0, 1fr) 3.4em; gap: 10px; align-items: center; font-size: 12.5px; color: var(--muted); }
+.slider { display: grid; grid-template-columns: 3.2em minmax(0, 1fr) 3.4em; gap: 10px; align-items: center; font-size: 12.5px; color: var(--muted); }
 .slider input { width: 100%; accent-color: var(--accent); }
 .slider output { text-align: right; font-variant-numeric: tabular-nums; }
 
-.label-field { display: grid; grid-template-columns: 2.6em minmax(0, 1fr); gap: 10px; align-items: center; font-size: 12.5px; color: var(--muted); }
+.label-field { display: grid; grid-template-columns: 3.2em minmax(0, 1fr); gap: 10px; align-items: center; font-size: 12.5px; color: var(--muted); }
 .label-field input { font: inherit; font-size: 14px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; width: 100%; min-width: 0; }
 
 .save { display: grid; gap: 8px; }
@@ -177,8 +177,8 @@ body.sheet-open { overflow: hidden; }
   .row.sub-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .row.sub-actions button { padding: 10px 4px; font-size: 14px; }
 
-  .slider, .label-field { font-size: 14px; grid-template-columns: 2.4em minmax(0, 1fr) 3.4em; }
-  .label-field { grid-template-columns: 2.4em minmax(0, 1fr); }
+  .slider, .label-field { font-size: 14px; grid-template-columns: 3.2em minmax(0, 1fr) 3.4em; }
+  .label-field { grid-template-columns: 3.2em minmax(0, 1fr); }
   .slider input { height: 32px; }
   .label-field input { font-size: 16px; padding: 9px 10px; } /* 16px keeps iOS from zooming in */
 
@@ -229,6 +229,7 @@ body.sheet-open { overflow: hidden; }
         </div>
         <label class="slider">拡大<input type="range" min="50" max="300" step="1" value="100" id="zoom-before" disabled><output id="zv-before">100%</output></label>
         <label class="slider">傾き<input type="range" min="-30" max="30" step="0.5" value="0" id="tilt-before" disabled><output id="tv-before">0°</output></label>
+        <label class="slider">明るさ<input type="range" min="0" max="100" step="1" value="35" id="bright-before" disabled><output id="bv-before">35</output></label>
         <label class="label-field">文字<input type="text" id="label-before" value="Before" maxlength="16"></label>
       </div>
 
@@ -247,6 +248,7 @@ body.sheet-open { overflow: hidden; }
         </div>
         <label class="slider">拡大<input type="range" min="50" max="300" step="1" value="100" id="zoom-after" disabled><output id="zv-after">100%</output></label>
         <label class="slider">傾き<input type="range" min="-30" max="30" step="0.5" value="0" id="tilt-after" disabled><output id="tv-after">0°</output></label>
+        <label class="slider">明るさ<input type="range" min="0" max="100" step="1" value="35" id="bright-after" disabled><output id="bv-after">35</output></label>
         <label class="label-field">文字<input type="text" id="label-after" value="After" maxlength="16"></label>
       </div>
 
@@ -300,7 +302,8 @@ body.sheet-open { overflow: hidden; }
   const FACEAPI_SRC = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.js';
   const MODEL_BASES = ['model', 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model'];
 
-  const blank = () => ({ img: null, angle: 0, k: 1, tx: 0, ty: 0, flip: false, a0: 0, k0: 1,
+  const BRIGHT_DEFAULT = 35;
+  const blank = () => ({ img: null, src: null, base: null, bright: BRIGHT_DEFAULT, angle: 0, k: 1, tx: 0, ty: 0, flip: false, a0: 0, k0: 1,
                          brows: null, browIdx: 0, token: 0, aligned: false });
   const slots = { before: blank(), after: blank() };
   let picking = null;   // { key, pts: [] } while tapping brow head / tail
@@ -406,7 +409,7 @@ body.sheet-open { overflow: hidden; }
     ctx.rotate(rad(s.angle));
     ctx.scale(s.flip ? -s.k : s.k, s.k);
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(s.img, -s.img.naturalWidth / 2, -s.img.naturalHeight / 2);
+    ctx.drawImage(s.src || s.img, -s.img.naturalWidth / 2, -s.img.naturalHeight / 2, s.img.naturalWidth, s.img.naturalHeight);
     ctx.restore();
 
     if (preview && picking && picking.key === key) {
@@ -488,8 +491,10 @@ body.sheet-open { overflow: hidden; }
   }
   function syncUI(key) {
     const s = slots[key], has = !!s.img;
-    ['auto-', 'manual-', 'flip-', 'rot-', 'zoom-', 'tilt-'].forEach(p => $(p + key).disabled = !has);
+    ['auto-', 'manual-', 'flip-', 'rot-', 'zoom-', 'tilt-', 'bright-'].forEach(p => $(p + key).disabled = !has);
     $('other-' + key).disabled = !(has && s.brows && s.brows.length > 1);
+    $('bright-' + key).value = s.bright;
+    $('bv-' + key).textContent = s.bright;
     const z = has ? Math.round(s.k / s.k0 * 100) : 100;
     $('zoom-' + key).value = z;
     $('zv-' + key).textContent = z + '%';
@@ -613,6 +618,36 @@ body.sheet-open { overflow: hidden; }
     }
   }
 
+  // --- brightness ---------------------------------------------------------
+  // Canvas `filter` doesn't work in iPhone Safari, so the pixels are adjusted directly.
+  // A gamma curve lifts the mid-tones while keeping highlights from blowing out.
+  const SRC_MAX = 2200;
+  function prepareSource(s) {
+    const iw = s.img.naturalWidth, ih = s.img.naturalHeight;
+    const sc = Math.min(1, SRC_MAX / Math.max(iw, ih));
+    const c = document.createElement('canvas');
+    c.width = Math.round(iw * sc); c.height = Math.round(ih * sc);
+    const x = c.getContext('2d', { willReadFrequently: true });
+    x.drawImage(s.img, 0, 0, c.width, c.height);
+    try { s.base = x.getImageData(0, 0, c.width, c.height); } catch (_) { s.base = null; }
+    s.src = c;
+    applyBright(s);
+  }
+  function applyBright(s) {
+    if (!s.src || !s.base) return;
+    const g = 1 / (1 + s.bright / 100 * 0.6);   // 0 → unchanged, 100 → gamma 1.6
+    const lift = s.bright / 100 * 0.04;         // a touch of overall exposure
+    const lut = new Uint8ClampedArray(256);
+    for (let i = 0; i < 256; i++) lut[i] = Math.round(255 * Math.min(1, Math.pow(i / 255, g) * (1 + lift)));
+    const src = s.base.data;
+    const out = new ImageData(s.base.width, s.base.height);
+    const d = out.data;
+    for (let i = 0; i < src.length; i += 4) {
+      d[i] = lut[src[i]]; d[i + 1] = lut[src[i + 1]]; d[i + 2] = lut[src[i + 2]]; d[i + 3] = 255;
+    }
+    s.src.getContext('2d').putImageData(out, 0, 0);
+  }
+
   // --- loading photos -----------------------------------------------------
   function loadFile(key, file) {
     if (!file) return;
@@ -624,7 +659,8 @@ body.sheet-open { overflow: hidden; }
     img.onload = () => {
       const s = slots[key];
       if (s.img && s.img.src.startsWith('blob:')) URL.revokeObjectURL(s.img.src);
-      Object.assign(s, blank(), { img, token: s.token + 1 });
+      Object.assign(s, blank(), { img, token: s.token + 1, bright: s.bright });
+      prepareSource(s);
       if (picking && picking.key === key) picking = null;
       fitCover(key);
       selectTab(key);
@@ -682,6 +718,14 @@ body.sheet-open { overflow: hidden; }
     });
     $('zoom-' + key).addEventListener('input', e => { zoomTo(key, e.target.value / 100); refresh(key); });
     $('tilt-' + key).addEventListener('input', e => { tiltTo(key, +e.target.value); refresh(key); });
+    let brightFrame = 0;
+    $('bright-' + key).addEventListener('input', e => {
+      const s = slots[key];
+      s.bright = +e.target.value;
+      $('bv-' + key).textContent = s.bright;
+      cancelAnimationFrame(brightFrame);
+      brightFrame = requestAnimationFrame(() => { applyBright(s); render(); });
+    });
     $('label-' + key).addEventListener('input', () => render());
   });
 
