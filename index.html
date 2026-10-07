@@ -115,6 +115,21 @@ button.on { background: var(--accent); color: var(--accent-ink); border-color: v
 .result img { width: 100%; max-width: 640px; border-radius: 4px; }
 .result p { margin: 0; font-size: 12.5px; color: var(--muted); }
 
+.inapp { background: var(--accent-soft); color: var(--ink); border-radius: 10px; padding: 10px 12px; font-size: 13px; line-height: 1.6; }
+.sheet {
+  position: fixed; inset: 0; z-index: 20; background: rgba(20, 16, 15, .88);
+  display: flex; align-items: center; justify-content: center;
+  padding: calc(16px + env(safe-area-inset-top, 0px)) 16px calc(16px + env(safe-area-inset-bottom, 0px));
+}
+.sheet[hidden] { display: none; }
+.sheet-body { width: min(100%, 560px); display: grid; gap: 14px; justify-items: center; }
+.sheet-title { margin: 0; color: #fff; text-align: center; font-size: 16px; line-height: 1.6; }
+.sheet-title b { color: #f3c2b4; }
+.sheet img { width: 100%; max-height: 64svh; object-fit: contain; border-radius: 6px; background: #fff;
+  -webkit-touch-callout: default; user-select: auto; }
+.sheet button { min-width: 160px; min-height: 48px; font-size: 16px; font-weight: 700; background: #fff; color: #221d1b; border: none; border-radius: 10px; }
+body.sheet-open { overflow: hidden; }
+
 /* Before / After switch: phones only */
 .tabs { display: none; }
 .tabs button {
@@ -172,6 +187,9 @@ button.on { background: var(--accent); color: var(--accent-ink); border-color: v
 </style>
 
 <div class="wrap">
+  <div class="inapp" id="inapp" hidden>
+    LINE などのアプリの中で開いています。保存がうまくいかないときは、右上（または右下）のメニューから<b>「ブラウザで開く」</b>を選んで Safari / Chrome で開いてください。
+  </div>
   <header>
     <h1><span class="en">Before / After</span> 写真メーカー</h1>
     <p>写真を入れると眉を自動で見つけて、まっすぐ・同じ大きさ・同じ位置に揃えます。1200×1200 JPEG で保存。写真はこの端末の中だけで処理されます。</p>
@@ -232,10 +250,13 @@ button.on { background: var(--accent); color: var(--accent-ink); border-color: v
     </aside>
   </div>
 
-  <section class="result" id="result" hidden>
-    <img id="result-img" alt="完成したビフォーアフター画像">
-    <p>保存がうまくいかないときは、この画像を長押し（パソコンは右クリック）して保存してください。</p>
-  </section>
+  <div class="sheet" id="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+    <div class="sheet-body">
+      <p class="sheet-title" id="sheet-title">画像を<b>長押し</b>して<br>「写真に保存」（Android は「画像をダウンロード」）を選んでください</p>
+      <img id="sheet-img" alt="完成したビフォーアフター画像">
+      <button type="button" id="sheet-close">閉じる</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -243,7 +264,7 @@ button.on { background: var(--accent); color: var(--accent-ink); border-color: v
   const S = 1200;
   const KEYS = ['before', 'after'];
   const canvas = document.getElementById('proof');
-  const ctx = canvas.getContext('2d');
+  let ctx = canvas.getContext('2d');
   const $ = id => document.getElementById(id);
 
   // Layout taken from the salon's reference image (fractions of the square)
@@ -408,12 +429,40 @@ button.on { background: var(--accent); color: var(--accent-ink); border-color: v
     ctx.fillText(text, f.tx, f.ty);
   }
 
-  function render(preview = true) {
+  function paint(preview) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, S, S);
     KEYS.forEach(k => drawSlot(k, preview));
     KEYS.forEach(drawLabel);
+  }
+  function render() {
+    paint(true);
+    scheduleExport();
+  }
+
+  // The finished JPEG is prepared ahead of time, so that tapping "save" can open the
+  // phone's share sheet straight away (Safari refuses it if the tap has to wait).
+  const exportCanvas = document.createElement('canvas');
+  exportCanvas.width = exportCanvas.height = S;
+  let ready = null, exportTimer = 0, exportSeq = 0;
+  function buildExport() {
+    const seq = ++exportSeq;
+    const main = ctx;
+    ctx = exportCanvas.getContext('2d');
+    try { paint(false); } finally { ctx = main; }
+    return new Promise(res => exportCanvas.toBlob(blob => {
+      if (!blob || seq !== exportSeq) return res(null);
+      const filename = `brow_before_after_${stamp()}.jpg`;
+      ready = { blob, filename, file: new File([blob], filename, { type: 'image/jpeg' }) };
+      res(ready);
+    }, 'image/jpeg', 0.92));
+  }
+  function scheduleExport() {
+    ready = null;
+    exportSeq++;
+    clearTimeout(exportTimer);
+    if (slots.before.img && slots.after.img) exportTimer = setTimeout(buildExport, 350);
   }
 
   // --- UI sync ------------------------------------------------------------
@@ -728,55 +777,67 @@ button.on { background: var(--accent); color: var(--accent-ink); border-color: v
     const d = new Date(), z = n => String(n).padStart(2, '0');
     return `${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}`;
   }
-  let lastUrl = null;
+  const isTouch = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches);
 
-  $('save').addEventListener('click', async () => {
-    if (!slots.before.img || !slots.after.img) {
-      setMsg(`${!slots.before.img ? 'Before' : 'After'} の写真がまだ入っていません。`, true); return;
-    }
-    render(false);
-    const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.92));
-    render(true);
-    if (!blob) { setMsg('画像を作れませんでした。もう一度お試しください。', true); return; }
-    const filename = `brow_before_after_${stamp()}.jpg`;
+  function blobToDataURL(blob) {
+    return new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
+  }
+  // Fallback that works in every browser, LINE included: show the image to long-press
+  async function showSheet(r) {
+    $('sheet-img').src = await blobToDataURL(r.blob);
+    $('sheet').hidden = false;
+    document.body.classList.add('sheet-open');
+  }
+  $('sheet-close').addEventListener('click', () => { $('sheet').hidden = true; document.body.classList.remove('sheet-open'); });
 
-    if (lastUrl) URL.revokeObjectURL(lastUrl);
-    lastUrl = URL.createObjectURL(blob);
-    $('result-img').src = lastUrl;
-    $('result').hidden = false;
-
+  async function saveOnComputer(r) {
     let downloads = null;
     try { downloads = window.claude && window.claude.use ? await window.claude.use('downloads') : null; } catch (_) {}
-
     if (downloads) {
       try {
-        await downloads.save({ filename, data: blob });
-        setMsg('保存しました：' + filename);
+        await downloads.save({ filename: r.filename, data: r.blob });
+        setMsg('保存しました：' + r.filename);
       } catch (err) {
         const code = err && err.code;
         if (code === 'declined') setMsg('保存をキャンセルしました。');
         else if (code === 'rate_limited') setMsg('少し待ってからもう一度押してください。', true);
-        else setMsg('ここでは保存できませんでした。下の画像を長押しして保存してください。', true);
+        else { setMsg(''); showSheet(r); }
       }
-    } else {
-      // phones: open the share sheet so "画像を保存" puts it straight into the photo library
-      const file = new File([blob], filename, { type: 'image/jpeg' });
-      const touch = window.matchMedia && matchMedia('(pointer: coarse)').matches;
-      if (touch && navigator.canShare && navigator.canShare({ files: [file] })) {
-        try {
-          await navigator.share({ files: [file] });
-          setMsg('「画像を保存」を選ぶと写真に入ります。');
-          return;
-        } catch (err) {
-          if (err && err.name === 'AbortError') { setMsg('保存をキャンセルしました。'); return; }
-        }
-      }
-      const a = document.createElement('a');
-      a.href = lastUrl; a.download = filename;
-      document.body.appendChild(a); a.click(); a.remove();
-      setMsg('保存しました：' + filename + '（保存されない場合は下の画像を長押し）');
+      return;
     }
+    const url = URL.createObjectURL(r.blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = r.filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    setMsg('ダウンロードしました：' + r.filename);
+  }
+
+  $('save').addEventListener('click', () => {
+    if (!slots.before.img || !slots.after.img) {
+      setMsg(`${!slots.before.img ? 'Before' : 'After'} の写真がまだ入っていません。`, true); return;
+    }
+    setMsg('');
+    if (isTouch) {
+      // Share sheet must be opened synchronously inside the tap
+      if (ready && navigator.canShare && navigator.canShare({ files: [ready.file] })) {
+        const r = ready;
+        navigator.share({ files: [r.file] })
+          .then(() => setMsg('保存できました。'))
+          .catch(err => {
+            if (err && err.name === 'AbortError') setMsg('「画像を保存」を選ぶと写真アプリに入ります。');
+            else showSheet(r);
+          });
+        return;
+      }
+      (ready ? Promise.resolve(ready) : buildExport()).then(r => r ? showSheet(r) : setMsg('画像を作れませんでした。もう一度押してください。', true));
+      return;
+    }
+    (ready ? Promise.resolve(ready) : buildExport()).then(r => r ? saveOnComputer(r) : setMsg('画像を作れませんでした。もう一度押してください。', true));
   });
+
+  // In LINE / Instagram the in-app browser can't save files: suggest opening in Safari / Chrome
+  if (/Line\/|Instagram|FBAN|FBAV/i.test(navigator.userAgent)) $('inapp').hidden = false;
 
   // --- boot ---------------------------------------------------------------
   measureLabelFont();
